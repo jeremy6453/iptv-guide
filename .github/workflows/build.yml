@@ -1,9 +1,9 @@
 name: Build EPG
 
 on:
-  workflow_dispatch:  # Allows you to manually trigger it
+  workflow_dispatch:  # manual trigger
   schedule:
-    - cron: "0 */48 * * *"  # Every 2 days
+    - cron: "0 */48 * * *"  # every 2 days
 
 permissions:
   contents: write
@@ -13,7 +13,7 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repository
+      - name: Checkout repo
         uses: actions/checkout@v3
 
       - name: Set up Python
@@ -21,15 +21,16 @@ jobs:
         with:
           python-version: '3.11'
 
-      - name: Install Python dependencies
-        run: pip install requests lxml
+      - name: Install dependencies
+        run: |
+          pip install requests lxml
 
       - name: Merge EPGs
         env:
           IPTV_EPG: https://xtream-ie.org/xmltv.php?username=jBHCENewjm&password=tBQPCewkCU
           NZ_EPG: https://i.mjh.nz/nz/epg.xml
         run: |
-          python <<EOF
+          python3 - <<EOF
 import os
 import requests
 from lxml import etree
@@ -38,19 +39,16 @@ iptv = etree.fromstring(requests.get(os.environ['IPTV_EPG']).content)
 nz = etree.fromstring(requests.get(os.environ['NZ_EPG']).content)
 
 merged = etree.Element("tv", attrib=iptv.attrib)
-channel_ids = set()
+iptv_channels = set()
 
-# Add channels from IPTV first
 for ch in iptv.findall("channel"):
-    channel_ids.add(ch.get("id"))
+    iptv_channels.add(ch.get("id"))
     merged.append(ch)
 
-# Add NZ channels only if not already present
 for ch in nz.findall("channel"):
-    if ch.get("id") not in channel_ids:
+    if ch.get("id") not in iptv_channels:
         merged.append(ch)
 
-# Merge programs, NZ overrides IPTV
 programmes = {}
 for p in iptv.findall("programme"):
     key = (p.get("start"), p.get("channel"))
@@ -66,11 +64,11 @@ with open("epg.xml", "wb") as f:
     f.write(etree.tostring(merged, pretty_print=True, xml_declaration=True, encoding="UTF-8"))
 EOF
 
-      - name: Add show images with TMDb
+      - name: Add show images
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
-          python <<EOF
+          python3 - <<EOF
 import os, json, requests
 from lxml import etree
 from urllib.parse import quote
@@ -84,8 +82,9 @@ def get_image(title):
     t = title.strip().lower()
     if t in cache:
         return cache[t]
-    url = f"https://api.themoviedb.org/3/search/tv?api_key={os.getenv('TMDB_API_KEY')}&query={quote(t)}"
-    resp = requests.get(url).json()
+    resp = requests.get(
+        f"https://api.themoviedb.org/3/search/tv?api_key={os.getenv('TMDB_API_KEY')}&query={quote(t)}"
+    ).json()
     image = ""
     if resp.get("results"):
         poster = resp["results"][0].get("poster_path")
@@ -96,10 +95,23 @@ def get_image(title):
 
 for prog in root.findall("programme"):
     title = prog.findtext("title")
-    if not title: continue
-    icon_url = get_image(title)
-    if icon_url:
-        icon = etree.Element("icon", src=icon_url)
+    if not title:
+        continue
+    img_url = get_image(title)
+    if img_url:
+        icon = etree.Element("icon", src=img_url)
         prog.append(icon)
 
-tree.write("epg.xml", p
+tree.write("epg.xml", pretty_print=True, xml_declaration=True, encoding="UTF-8")
+with open("images.json", "w") as f:
+    json.dump(cache, f, indent=2)
+EOF
+
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./
+          force_orphan: true
+          enable_jekyll: false
