@@ -1,0 +1,112 @@
+name: Build EPG
+
+on:
+  schedule:
+    - cron: "0 */48 * * *"  # every 2 days
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install requests lxml
+
+      - name: Merge EPGs
+        run: |
+          mkdir -p build
+          python <<EOF
+import os, requests
+from lxml import etree
+
+iptv_url = "https://xtream-ie.org/xmltv.php?username=jBHCENewjm&password=tBQPCewkCU"
+nz_url = "https://i.mjh.nz/nz/epg.xml"
+
+iptv = etree.fromstring(requests.get(iptv_url).content)
+nz = etree.fromstring(requests.get(nz_url).content)
+
+merged = etree.Element("tv", attrib=iptv.attrib)
+channels = {}
+
+# Add channels (NZ overrides IPTV)
+for el in iptv.findall("channel"):
+    channels[el.findtext("display-name")] = el
+for el in nz.findall("channel"):
+    channels[el.findtext("display-name")] = el
+for ch in channels.values():
+    merged.append(ch)
+
+# Add programmes
+for el in iptv.findall("programme"):
+    merged.append(el)
+for el in nz.findall("programme"):
+    merged.append(el)
+
+with open("build/epg.xml", "wb") as f:
+    f.write(etree.tostring(merged, pretty_print=True, xml_declaration=True))
+EOF
+
+      - name: Add Show Images via TMDb
+        env:
+          TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
+        run: |
+          python <<EOF
+import os, json, requests
+from lxml import etree
+from urllib.parse import quote
+
+file = "build/epg.xml"
+tree = etree.parse(file)
+root = tree.getroot()
+
+cache_file = "images.json"
+cache = json.load(open(cache_file)) if os.path.exists(cache_file) else {}
+
+def tmdb_lookup(title):
+    key = os.getenv("TMDB_API_KEY")
+    title = title.strip().lower()
+    if title in cache:
+        return cache[title]
+    url = f"https://api.themoviedb.org/3/search/tv?api_key={key}&query={quote(title)}"
+    r = requests.get(url).json()
+    if r.get("results"):
+        p = r["results"][0].get("poster_path")
+        if p:
+            img_url = f"https://image.tmdb.org/t/p/w500{p}"
+            cache[title] = img_url
+            return img_url
+    cache[title] = ""
+    return ""
+
+for prog in root.findall("programme"):
+    title = prog.findtext("title")
+    if not title: continue
+    img = tmdb_lookup(title)
+    if img:
+        icon = etree.Element("icon", src=img)
+        prog.append(icon)
+
+tree.write(file, pretty_print=True, xml_declaration=True, encoding="UTF-8")
+with open("images.json", "w") as f:
+    json.dump(cache, f, indent=2)
+EOF
+
+      - name: Deploy epg.xml to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_branch: gh-pages
+          publish_dir: ./build
+          force_orphan: true
