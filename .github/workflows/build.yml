@@ -1,9 +1,9 @@
 name: Build EPG
 
 on:
-  workflow_dispatch:  # manual trigger
+  workflow_dispatch:  # Allows manual run
   schedule:
-    - cron: "0 */48 * * *"  # every 2 days
+    - cron: "0 */48 * * *"  # Every 2 days
 
 permissions:
   contents: write
@@ -13,10 +13,10 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: Checkout repository
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: '3.11'
@@ -30,7 +30,7 @@ jobs:
           IPTV_EPG: https://xtream-ie.org/xmltv.php?username=jBHCENewjm&password=tBQPCewkCU
           NZ_EPG: https://i.mjh.nz/nz/epg.xml
         run: |
-          python3 - <<EOF
+          python3 <<EOF
 import os
 import requests
 from lxml import etree
@@ -53,6 +53,7 @@ programmes = {}
 for p in iptv.findall("programme"):
     key = (p.get("start"), p.get("channel"))
     programmes[key] = p
+
 for p in nz.findall("programme"):
     key = (p.get("start"), p.get("channel"))
     programmes[key] = p
@@ -68,7 +69,7 @@ EOF
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
         run: |
-          python3 - <<EOF
+          python3 <<EOF
 import os, json, requests
 from lxml import etree
 from urllib.parse import quote
@@ -104,14 +105,3 @@ for prog in root.findall("programme"):
 
 tree.write("epg.xml", pretty_print=True, xml_declaration=True, encoding="UTF-8")
 with open("images.json", "w") as f:
-    json.dump(cache, f, indent=2)
-EOF
-
-      - name: Deploy to GitHub Pages
-        uses: peaceiris/actions-gh-pages@v3
-        with:
-          github_token: ${{ secrets.GITHUB_TOKEN }}
-          publish_branch: gh-pages
-          publish_dir: ./
-          force_orphan: true
-          enable_jekyll: false
