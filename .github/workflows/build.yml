@@ -1,7 +1,7 @@
 name: Build EPG
 
 on:
-  workflow_dispatch:  # Allows manual run
+  workflow_dispatch:
   schedule:
     - cron: "0 */48 * * *"  # Every 2 days
 
@@ -22,86 +22,24 @@ jobs:
           python-version: '3.11'
 
       - name: Install dependencies
-        run: |
-          pip install requests lxml
+        run: pip install requests lxml
 
       - name: Merge EPGs
         env:
           IPTV_EPG: https://xtream-ie.org/xmltv.php?username=jBHCENewjm&password=tBQPCewkCU
           NZ_EPG: https://i.mjh.nz/nz/epg.xml
-        run: |
-          python3 <<EOF
-import os
-import requests
-from lxml import etree
-
-iptv = etree.fromstring(requests.get(os.environ['IPTV_EPG']).content)
-nz = etree.fromstring(requests.get(os.environ['NZ_EPG']).content)
-
-merged = etree.Element("tv", attrib=iptv.attrib)
-iptv_channels = set()
-
-for ch in iptv.findall("channel"):
-    iptv_channels.add(ch.get("id"))
-    merged.append(ch)
-
-for ch in nz.findall("channel"):
-    if ch.get("id") not in iptv_channels:
-        merged.append(ch)
-
-programmes = {}
-for p in iptv.findall("programme"):
-    key = (p.get("start"), p.get("channel"))
-    programmes[key] = p
-
-for p in nz.findall("programme"):
-    key = (p.get("start"), p.get("channel"))
-    programmes[key] = p
-
-for p in sorted(programmes.values(), key=lambda x: x.get("start")):
-    merged.append(p)
-
-with open("epg.xml", "wb") as f:
-    f.write(etree.tostring(merged, pretty_print=True, xml_declaration=True, encoding="UTF-8"))
-EOF
+        run: python .github/scripts/merge_epgs.py
 
       - name: Add show images
         env:
           TMDB_API_KEY: ${{ secrets.TMDB_API_KEY }}
-        run: |
-          python3 <<EOF
-import os, json, requests
-from lxml import etree
-from urllib.parse import quote
+        run: python .github/scripts/add_images.py
 
-tree = etree.parse("epg.xml")
-root = tree.getroot()
-cache_file = "images.json"
-cache = json.load(open(cache_file)) if os.path.exists(cache_file) else {}
-
-def get_image(title):
-    t = title.strip().lower()
-    if t in cache:
-        return cache[t]
-    resp = requests.get(
-        f"https://api.themoviedb.org/3/search/tv?api_key={os.getenv('TMDB_API_KEY')}&query={quote(t)}"
-    ).json()
-    image = ""
-    if resp.get("results"):
-        poster = resp["results"][0].get("poster_path")
-        if poster:
-            image = f"https://image.tmdb.org/t/p/w500{poster}"
-    cache[t] = image
-    return image
-
-for prog in root.findall("programme"):
-    title = prog.findtext("title")
-    if not title:
-        continue
-    img_url = get_image(title)
-    if img_url:
-        icon = etree.Element("icon", src=img_url)
-        prog.append(icon)
-
-tree.write("epg.xml", pretty_print=True, xml_declaration=True, encoding="UTF-8")
-with open("images.json", "w") as f:
+      - name: Deploy to GitHub Pages
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./
+          publish_branch: gh-pages
+          force_orphan: true
+          enable_jekyll: false
